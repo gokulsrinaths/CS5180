@@ -36,6 +36,12 @@ def build_inverted_index():
     terms_collection.delete_many({})
     documents_collection.delete_many({})
 
+    vectorizer = TfidfVectorizer()
+    preprocessed_docs = [preprocess(doc) for doc in documents]
+    tfidf_matrix = vectorizer.fit_transform(preprocessed_docs)
+    feature_names = vectorizer.get_feature_names_out()
+    vocab = {term: idx for idx, term in enumerate(feature_names)}
+
     for doc_id, content in enumerate(documents, start=1):
         preprocessed_content = preprocess(content)
         tokens = tokenize(preprocessed_content)
@@ -52,23 +58,28 @@ def build_inverted_index():
 
         # Add terms to inverted index
         for term, positions in term_frequencies.items():
-            term_entry = terms_collection.find_one({"term": term})
-            if term_entry:
-                term_entry["docs"].append({"doc_id": doc_id, "positions": positions})
-                terms_collection.replace_one({"term": term}, term_entry)
-            else:
-                terms_collection.insert_one({
-                    "term": term,
-                    "docs": [{"doc_id": doc_id, "positions": positions}]
-                })
+            tfidf_value = (
+                tfidf_matrix[doc_id-1, vocab.get(term, -1)]
+                if term in vocab else 0
+            )
+            if tfidf_value > 0:
+                term_entry = terms_collection.find_one({"term": term})
+                if term_entry:
+                    term_entry["docs"].append({"doc_id": doc_id, "positions": positions, "tfidf": tfidf_value})
+                    terms_collection.replace_one({"term": term}, term_entry)
+                else:
+                    terms_collection.insert_one({
+                        "_id": vocab[term],
+                        "term": term,
+                        "pos": vocab[term],
+                        "docs": [{"doc_id": doc_id, "positions": positions, "tfidf": tfidf_value}]
+                    })
 
 # Query the inverted index and rank documents using cosine similarity
 def query_index(queries):
-    # Prepare the vectorizer for TF-IDF
     vectorizer = TfidfVectorizer()
     preprocessed_docs = [preprocess(doc) for doc in documents]
     tfidf_matrix = vectorizer.fit_transform(preprocessed_docs)
-    feature_names = vectorizer.get_feature_names_out()
 
     for query_id, query_text in enumerate(queries, start=1):
         preprocessed_query = preprocess(query_text)
